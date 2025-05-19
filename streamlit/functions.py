@@ -5,36 +5,28 @@ from datetime import datetime
 import os
 import pandas as pd
 import PyPDF2
+from PIL import Image
 
-PROFILE_NAME = os.environ.get('AWS_PROFILE', 'edn174')
+PROFILE_NAME = os.environ.get('AWS_PROFILE', '')
 
-def get_boto3_client(service_name, region_name='us-east-1', profile_name='edn174'):
+def get_boto3_client(service_name, region_name='us-east-1', profile_name=''):
     """
-    Retorna um cliente do serviço AWS especificado.
-    
-    Tenta usar o perfil especificado para desenvolvimento local primeiro.
-    Se falhar, assume que está em uma instância EC2 e usa as credenciais do IAM role.
+    Retorna um cliente do serviço AWS usando IAM Role da instância.
     """
     try:
-        session = boto3.Session(profile_name=profile_name, region_name=region_name)
+        # Primeiro tenta usar o IAM Role (modo de produção)
+        session = boto3.Session(region_name=region_name)
         client = session.client(service_name)
-        if service_name == 'sts':
-            caller_identity = client.get_caller_identity()
-            print(f"DEBUG: Caller Identity: {caller_identity}")
-        print(f"DEBUG: Using profile '{profile_name}' in region '{region_name}' for service '{service_name}'")
+        
+        print(f"DEBUG: Usando IAM Role para acessar '{service_name}' na região '{region_name}'")
         return client
+        
     except Exception as e:
-        print(f"INFO: Não foi possível usar o perfil local '{profile_name}', tentando credenciais do IAM role: {str(e)}")
-        try:
-            session = boto3.Session(region_name=region_name)
-            client = session.client(service_name)
-            caller_identity = client.get_caller_identity()
-            print(f"DEBUG: Caller Identity (IAM Role): {caller_identity}")
-            print(f"DEBUG: Using IAM role in region '{region_name}' for service '{service_name}'")
-            return client
-        except Exception as e:
-            print(f"ERRO: Falha ao criar cliente boto3: {str(e)}")
-            return None
+        print(f"ERRO: Não foi possível acessar a AWS: {str(e)}")
+        print("ATENÇÃO: Verifique se o IAM Role está corretamente associado à instância EC2.")
+        return None
+
+
 
 def read_pdf(file_path):
     """Lê o conteúdo de um arquivo PDF e retorna como string."""
@@ -69,26 +61,48 @@ def format_context(context, source="Contexto Adicional"):
     return f"\n\n{source}:\n{context}\n\n"
 
 #ALTERAR
-def generate_chat_prompt(user_message, conversation_history=None, context=""):
+def generate_chat_prompt(user_message, conversation_history=None, context="Robo que analisa imagens de materiais recicláveis"):
     """
     Gera um prompt de chat completo com histórico de conversa e contexto opcional.
     """
     system_prompt = """
-    Você é o atendente virtual do Hospital Central. Atenda os pacientes de acordo. 
-    Seja sério, não pergunte o nome, faça a triagem médica. 
+    Você é um robô especialista em analisar imagens de materiais recicláveis.
+    Ao receber uma imagem, observe atentamente todos os detalhes visuais (formas, cores, texturas e tamanhos)
+    para identificar corretamente os materiais presentes.
+    
+    Regras:
+      - Retorne uma lista de itens, onde cada item é um objeto JSON com as chaves "Tipo de objeto", "Tipo de material" e "Quantidade".
+      - Utilize nomes simples e padronizados para os objetos, por exemplo, "garrafa plástica", "lata", etc.
+      - Informe a quantidade EXATA detectada para cada objeto na imagem.
+      - Retorne somente o material externo de cada obejto, não o conteúdo interno.
+      
+    Exemplo de saída:
+    [
+      {
+        "Tipo de objeto": "garrafa plástica",
+        "Tipo de material": "PET",
+        "Quantidade": 3
+      },
+      {
+        "Tipo de objeto": "lata",
+        "Tipo de material": "Vidro",
+        "Quantidade": 1
+      }
+    ]
+    
+    Por favor, processe a imagem conforme descrito e retorne apenas o JSON, sem nenhum texto adicional.
     """
 
     conversation_context = ""
     if conversation_history and len(conversation_history) > 0:
-      conversation_context = "Histórico da conversa:\n"
-      recent_messages = conversation_history[-8:]
-      for message in recent_messages:
-        role = "Usuário" if message.get('role') == 'user' else "Assistente"
-        conversation_context += f"{role}: {message.get('content')}\n"
-      conversation_context += "\n"
+        conversation_context = "Histórico da conversa:\n"
+        recent_messages = conversation_history[-8:]
+        for message in recent_messages:
+            role = "Usuário" if message.get('role') == 'user' else "Assistente"
+            conversation_context += f"{role}: {message.get('content')}\n"
+        conversation_context += "\n"
 
     full_prompt = f"{system_prompt}\n\n{conversation_context}{context}Usuário: {user_message}\n\nAssistente:"
-    
     return full_prompt
 
 #ALTERAR
@@ -188,3 +202,11 @@ def read_csv_from_uploaded_file(uploaded_file):
         return df.to_string()
     except Exception as e:
         return f"Erro ao ler CSV: {str(e)}"
+
+def read_image_from_uploaded_file(uploaded_file):
+    """Lê o conteúdo de uma imagem carregada pelo Streamlit."""
+    try:
+        image = Image.open(uploaded_file)
+        return f"Imagem carregada com dimensões: {image.size}"
+    except Exception as e:
+        return f"Erro ao processar a imagem: {str(e)}"

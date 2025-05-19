@@ -1,5 +1,21 @@
+# Configuração da página deve ser o primeiro comando
 import streamlit as st
-import requests
+
+st.set_page_config(
+    page_title="ReciclaMais AI",
+    page_icon="logo_reciclamaisai.png",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Importações
+from PIL import Image
+from functions import (
+    generate_chat_prompt, format_context, 
+    read_pdf_from_uploaded_file, read_txt_from_uploaded_file, read_csv_from_uploaded_file
+)
+import os
+# Removed unused import of requests
 import json
 import hmac
 import uuid
@@ -8,14 +24,61 @@ import boto3
 from datetime import datetime
 import re
 import base64
-import os
-from functions import (
-    generate_chat_prompt, format_context, 
-    read_pdf_from_uploaded_file, read_txt_from_uploaded_file, read_csv_from_uploaded_file
-)
-PROFILE_NAME = os.environ.get("AWS_PROFILE", "edn174")
+from dotenv import load_dotenv
+
+load_dotenv()
+
+PROFILE_NAME = os.environ.get("AWS_PROFILE", "")
 
 INFERENCE_PROFILE_ARN = "arn:aws:bedrock:us-east-1:851614451056:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+
+# CSS personalizado para melhorar o layout
+st.markdown("""
+    <style>
+    .main-container {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+        background-color: #f9f9f9;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .input-container {
+        margin-top: 20px;
+        margin-bottom: 20px;
+    }
+    .message-container {
+        margin-bottom: 20px;
+    }
+    .user-message {
+        background-color: #e6f7ff;
+        padding: 10px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        text-align: right;
+    }
+    .assistant-message {
+        background-color: #ffffff;
+        padding: 10px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        text-align: left;
+        border: 1px solid #e6e6e6;
+    }
+    .send-button {
+        width: 100%;
+        background-color: #4CAF50;
+        color: white;
+        border: none;
+        padding: 10px;
+        border-radius: 5px;
+        cursor: pointer;
+    }
+    .send-button:hover {
+        background-color: #45a049;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 def add_javascript():
     """Adiciona JavaScript para melhorar a interação do usuário com o chat"""
@@ -36,21 +99,16 @@ def add_javascript():
                     }
                 });
             }
+            
+            
         }, 1000); // Pequeno atraso para garantir que os elementos foram carregados
     });
     </script>
     """
     st.components.v1.html(js_code, height=0)
 
-#alterar
-st.set_page_config(
-   page_title="NOME DA PÁGINA",
-   page_icon="logo.jpeg",
-   layout="wide",
-   initial_sidebar_state="expanded"
-)
 
-logo_path = "logo.jpeg"
+logo_path = "logo_reciclamaisai.png"
 
 def preprocess_user_message(message):
     """
@@ -58,33 +116,22 @@ def preprocess_user_message(message):
     """
     return message
 
-def get_boto3_client(service_name, region_name='us-east-1', profile_name='edn174'):
+def get_boto3_client(service_name, region_name='us-east-1', profile_name=''):
     """
-    Retorna um cliente do serviço AWS especificado.
-    
-    Tenta usar o perfil especificado para desenvolvimento local primeiro.
-    Se falhar, assume que está em uma instância EC2 e usa as credenciais do IAM role.
+    Retorna um cliente do serviço AWS usando IAM Role da instância.
     """
     try:
-        session = boto3.Session(profile_name=profile_name, region_name=region_name)
+        # Primeiro tenta usar o IAM Role (modo de produção)
+        session = boto3.Session(region_name=region_name)
         client = session.client(service_name)
-        if service_name == 'sts':
-            caller_identity = client.get_caller_identity()
-            print(f"DEBUG: Caller Identity: {caller_identity}")
-        print(f"DEBUG: Using profile '{profile_name}' in region '{region_name}' for service '{service_name}'")
+        
+        print(f"DEBUG: Usando IAM Role para acessar '{service_name}' na região '{region_name}'")
         return client
+        
     except Exception as e:
-        print(f"INFO: Não foi possível usar o perfil local '{profile_name}', tentando credenciais do IAM role: {str(e)}")
-        try:
-            session = boto3.Session(region_name=region_name)
-            client = session.client(service_name)
-            caller_identity = client.get_caller_identity()
-            print(f"DEBUG: Caller Identity (IAM Role): {caller_identity}")
-            print(f"DEBUG: Using IAM role in region '{region_name}' for service '{service_name}'")
-            return client
-        except Exception as e:
-            print(f"ERRO: Falha ao criar cliente boto3: {str(e)}")
-            return None
+        print(f"ERRO: Não foi possível acessar a AWS: {str(e)}")
+        print("ATENÇÃO: Verifique se o IAM Role está corretamente associado à instância EC2.")
+        return None
 
 def query_bedrock(message, session_id="", model_params=None, context=""):
     """
@@ -100,11 +147,11 @@ def query_bedrock(message, session_id="", model_params=None, context=""):
             "response_format": {"type": "text"}
         }
     
-    bedrock_runtime = get_boto3_client('bedrock-runtime')
+    bedrock_runtime = get_boto3_client('bedrock-runtime', profile_name=PROFILE_NAME)
     
     if not bedrock_runtime:
         return {
-            "answer": "Não foi possível conectar ao serviço Bedrock. Verifique suas credenciais.",
+            "answer": "Não foi possível conectar ao serviço Bedrock. Verifique suas credenciais AWS e o perfil configurado.",
             "sessionId": session_id or str(uuid.uuid4())
         }
     
@@ -162,8 +209,8 @@ def check_password():
         """Checks whether a password entered by the user is correct."""
         print(f"DEBUG LOGIN: Tentativa de login - Usuário: '{st.session_state['username']}', Senha: '{st.session_state['password']}'")
         
-        if hmac.compare_digest(st.session_state["username"].strip(), "admin") and \
-        hmac.compare_digest(st.session_state["password"].strip(), "admin123"):
+        if hmac.compare_digest(st.session_state["username"].strip(), "grupo3") and \
+        hmac.compare_digest(st.session_state["password"].strip(), "#Reciclamaisai2025"):
             print("DEBUG LOGIN: Autenticação bem-sucedida")
             st.session_state["password_correct"] = True
             st.session_state["auth_cookie"] = {
@@ -261,7 +308,7 @@ def logout():
 
 def get_rag_context():
     """
-    Obtém e formata o contexto RAG.    
+    Obtém e formata o contexto RAG.
     """
     if st.session_state.get('use_rag', False):
         if st.session_state.rag_source == "Arquivo":
@@ -274,7 +321,12 @@ def get_rag_context():
                     return format_context(read_txt_from_uploaded_file(file), f"Contexto do arquivo TXT: {file.name}")
                 elif file_type == "CSV":
                     return format_context(read_csv_from_uploaded_file(file), f"Contexto do arquivo CSV: {file.name}")
-        
+                elif file_type in ["JPEG", "JPG", "PNG"]:
+                    try:
+                        image = Image.open(file)
+                        return format_context(f"Imagem carregada com dimensões: {image.size}", f"Contexto do arquivo {file_type}: {file.name}")
+                    except Exception as e:
+                        return f"Erro ao processar a imagem: {str(e)}"
         elif st.session_state.rag_source == "Texto Direto":
             if st.session_state.direct_text:
                 return format_context(st.session_state.direct_text, "Contexto do Usuário")
@@ -287,7 +339,6 @@ def handle_message():
         user_message = st.session_state.user_input.strip()
         
         current_input = user_message
-        
         is_duplicate = False
         if len(st.session_state.messages) > 0:
             last_messages = [m for m in st.session_state.messages if m["role"] == "user"]
@@ -312,6 +363,14 @@ def handle_message():
                     file_content = read_csv_from_uploaded_file(attached_file)
                 elif file_extension in ['doc', 'docx']:
                     file_content = "Arquivo do Word anexado (processamento de conteúdo não disponível)"
+                elif file_extension in ['jpeg', 'jpg', 'png']:
+                    try:
+                        # Processar a imagem usando Pillow
+                        image = Image.open(attached_file)
+                        file_content = f"Imagem carregada com dimensões: {image.size}"
+                        # Aqui você pode adicionar mais lógica de análise da imagem
+                    except Exception as e:
+                        file_content = f"Erro ao processar a imagem: {str(e)}"
                 
                 file_info = f"\n[Arquivo anexado: {attached_file.name}]"
                 
@@ -378,9 +437,9 @@ def handle_message():
 
 
             st.rerun()
-
         else:
-            st.session_state.user_input = ""
+            # Apenas limpe a variável local, se necessário
+            pass
 
 def add_javascript():
     """Adiciona JavaScript para melhorar a interação do usuário com o chat"""
@@ -402,6 +461,7 @@ def add_javascript():
                 });
             }
             
+            /*
             // Mostrar o nome do arquivo quando for anexado
             const fileUploader = document.querySelector('.stFileUploader');
             if (fileUploader) {
@@ -429,6 +489,7 @@ def add_javascript():
                 
                 observer.observe(fileUploader, { childList: true, subtree: true });
             }
+            */
         }, 1000); // Pequeno atraso para garantir que os elementos foram carregados
     });
     </script>
@@ -456,13 +517,13 @@ def extract_title_from_response(response_text):
             if len(title) + len(word) + 1 <= 40:
                 title += " " + word if title else word
             else:
-                title += "..."
+                title += "...";
                 break
     else:
         title = sentence
         
     if title and len(title) > 0:
-        title = title[0].upper() + title[1:]
+        title = title[0].upper() + title[1:];
         
     return title
 
@@ -890,7 +951,7 @@ if check_password():
     if 'use_rag' not in st.session_state:
         st.session_state.use_rag = False
     if 'rag_source' not in st.session_state:
-        st.session_state.rag_source = "Texto Direto"
+        st.session_state.rag_source = "Arquivo"  # Define o padrão como "Arquivo"
     if 'file_type' not in st.session_state:
         st.session_state.file_type = "TXT"
     if 'uploaded_file' not in st.session_state:
@@ -935,14 +996,10 @@ if check_password():
             st.session_state.rag_source = rag_source
 
             if rag_source == "Arquivo":
-                file_type = st.selectbox(
-                    "Tipo de Arquivo",
-                    ("PDF", "TXT", "CSV"),
-                    index=("PDF", "TXT", "CSV").index(st.session_state.file_type)
-                )
-                st.session_state.file_type = file_type
-                uploaded_file = st.file_uploader(f"Carregar Arquivo {file_type}", type=file_type, key="file_uploader")
-                st.session_state.uploaded_file = uploaded_file
+                uploaded_file = st.file_uploader("Carregar Arquivo", type=["pdf", "txt", "csv", "jpeg", "jpg", "png"])
+                if uploaded_file:
+                    st.session_state.uploaded_file = uploaded_file
+                    st.session_state.file_type = uploaded_file.name.split('.')[-1].upper()
 
             elif rag_source == "Texto Direto":
                 direct_text = st.text_area(
@@ -982,23 +1039,51 @@ if check_password():
         
         st.markdown('<div class="input-container">', unsafe_allow_html=True)
         
-        st.markdown('<div class="input-container">', unsafe_allow_html=True)
-
-        col1, col2, col3 = st.columns([5, 1, 1])
-
-        with col1:
-            st.text_area("Mensagem", placeholder="Digite sua mensagem aqui...", key="user_input", 
-                height=70, label_visibility="collapsed")
-
-        with col2:
-            file_to_send = st.file_uploader("Anexar arquivo", type=["pdf", "txt", "csv", "doc", "docx", "xls", "xlsx"], 
-                                        key="file_to_send", label_visibility="collapsed")
-            st.markdown('<div class="attach-icon" title="Anexar arquivo"><i class="fas fa-paperclip"></i></div>', unsafe_allow_html=True)
-
-        with col3:
+        # Container de entrada dividido em dois blocos: à esquerda, a área de mensagem com upload; à direita, a câmera
+        st.markdown('<div class="input-area-container" style="margin-top: 20px;">', unsafe_allow_html=True)
+        col_left, col_right = st.columns([4,1])
+        with col_left:
+            # Preenche o campo de mensagem com o texto padrão
+            st.text_area("Mensagem", value="Faça o seu trabalho baseado no prompt e analise esse arquivo com precisão:", placeholder="Faça o seu trabalho baseado no prompt e analise esse arquivo com precisão:", key="user_input", height=70, label_visibility="collapsed")
+            file_to_send = st.file_uploader(
+                "", 
+                type=["pdf", "txt", "csv", "doc", "docx", "xls", "xlsx", "jpeg", "jpg", "png"], 
+                key="file_to_send", 
+                label_visibility="collapsed"
+            )
+            if not file_to_send:
+                st.markdown(
+                    '<div class="custom-file-area" onclick="document.querySelector(\'input[type=file]\').click()">'
+                    '<i class="fas fa-cloud-upload-alt"></i><br>Arraste e solte ou clique para selecionar'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+            else:
+                file_extension = file_to_send.name.split('.')[-1].lower()
+                if file_extension in ["jpeg", "jpg", "png"]:
+                    try:
+                        from PIL import Image
+                        image = Image.open(file_to_send)
+                        st.image(image, caption=f"Imagem: {file_to_send.name}", width=200)
+                    except Exception as e:
+                        st.error(f"Erro ao processar a imagem: {str(e)}")
+                else:
+                    st.write(f"Arquivo selecionado: {file_to_send.name}")
             if st.button("Enviar", key="send_button", use_container_width=True):
                 if st.session_state.user_input and st.session_state.user_input.strip():
                     handle_message()
+        with col_right:
+            # Área da câmera, posicionada à direita do chat
+            camera_input = st.camera_input("Tire uma foto")
+            if camera_input is not None:
+                import io
+                from PIL import Image
+                img = Image.open(io.BytesIO(camera_input.getvalue()))
+                st.image(img, caption="Foto capturada", width=200)
+                # Chame sua função de análise, se necessário:
+                # resultado = identify_image_objects(img)
+                # st.json(resultado)
+        st.markdown('</div>', unsafe_allow_html=True)
         
         with messages_container:
             for idx, message in enumerate(st.session_state.messages):
