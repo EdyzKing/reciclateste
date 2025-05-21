@@ -61,53 +61,37 @@ def format_context(context, source="Contexto Adicional"):
     return f"\n\n{source}:\n{context}\n\n"
 
 #ALTERAR
-
-def generate_chat_prompt(user_message, image_data=None, conversation_history=None, context=None):
+def generate_chat_prompt(user_message, conversation_history=None, context="Robo que analisa imagens de materiais recicláveis"):
     """
-    Gera um prompt de chat para análise da imagem atual, sem manter dados de imagens anteriores.
-    
-    Args:
-        user_message (str): Mensagem do usuário
-        image_data (str, optional): Dados da imagem atual
-        conversation_history (list, optional): Histórico da conversa
+    Gera um prompt de chat completo com histórico de conversa e contexto opcional.
     """
     system_prompt = """
     Você é um especialista em análise visual de materiais recicláveis.
-    IMPORTANTE: Analise com precisão, APENAS a imagem atual fornecida nesta solicitação.
-    Ignore completamente qualquer referência ou análise de imagens anteriores.
 
-    Diretrizes para a análise da imagem atual:
-    1. Analise com precisão, somente os objetos visíveis na imagem fornecida
-    2. Para cada objeto identificado, forneça:
-       - Tipo de objeto
-       - Material
-       - Quantidade
+    Sua tarefa é analisar cuidadosamente imagens contendo resíduos recicláveis e identificar com precisão os objetos presentes com base em suas características visuais (como forma, cor, textura e tamanho).
 
-    Formato obrigatório da resposta:
-    Tipo de objeto: [nome do objeto]
-    Material: [tipo de material]
-    Quantidade: [número]
+    Diretrizes para a análise:
+    Liste todos os objetos visíveis, indicando:
+    O tipo de objeto (por exemplo: garrafa plástica, lata, caixa de papelão, etc.),
+    O material do qual ele é feito (por exemplo: PET, alumínio, papelão, vidro, etc.),
+    A quantidade exata detectada de cada tipo,
+    Use nomenclaturas padronizadas e simples para facilitar a classificação,
+    Retorne apenas os dados solicitados, sem comentários, explicações ou textos adicionais.
 
-    Não inclua:
-    - Referências a imagens anteriores
-    - Explicações ou comentários extras
+   
+    
     """
 
-    # Inicializa as variáveis de contexto
-    image_part = ""
-    context_part = ""
-    
-    # Adiciona dados da imagem se disponíveis
-    if image_data:
-        image_part = f"Imagem atual para análise:\n{image_data}\n"
-    
-    # Adiciona contexto extra se fornecido
-    if context:
-        context_part = f"\nContexto adicional:\n{context}\n"
-    
-    # Monta o prompt final
-    full_prompt = f"{system_prompt}\n{image_part}{context_part}\nUsuário: {user_message}\n\nAssistente:"
-    
+    conversation_context = ""
+    if conversation_history and len(conversation_history) > 0:
+        conversation_context = "Histórico da conversa:\n"
+        recent_messages = conversation_history[-8:]
+        for message in recent_messages:
+            role = "Usuário" if message.get('role') == 'user' else "Assistente"
+            conversation_context += f"{role}: {message.get('content')}\n"
+        conversation_context += "\n"
+
+    full_prompt = f"{system_prompt}\n\n{conversation_context}{context}Usuário: {user_message}\n\nAssistente:"
     return full_prompt
 
 #ALTERAR
